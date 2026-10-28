@@ -1,0 +1,24 @@
+---
+sigstore_fulcio_upstream_image: "ghcr.io/sigstore/fulcio:v1.6.6"
+sigstore_fulcio_image: "localhost/fulcio-ipa:latest"
+sigstore_fulcio_port: 5555
+sigstore_fulcio_config_dir: /etc/ipa/sigstore
+
+# Signer mode: fileca (key on disk) or pkcs11ca (key in HSM/NSS DB)
+sigstore_fulcio_signer_mode: fileca
+
+# fileca mode settings
+sigstore_fulcio_ca_cert: "{{ sigstore_fulcio_config_dir }}/fulcio-intermediate.crt"
+sigstore_fulcio_ca_key: "{{ sigstore_fulcio_config_dir }}/fulcio-key.pem"
+sigstore_fulcio_ca_chain: "{{ sigstore_fulcio_config_dir }}/fulcio-chain.crt"
+sigstore_fulcio_key_passphrase: "{{ vault_sigstore_fulcio_key_passphrase | default('FulcioKeyPass123') }}"
+sigstore_fulcio_generate_ca: true
+
+# pkcs11ca mode settings
+sigstore_fulcio_pkcs11_config: /etc/ipa/fulcio/pkcs11-config.json
+sigstore_fulcio_pkcs11_ca_cert: /etc/ipa/fulcio/ca-cert.pem
+
+sigstore_fulcio_oidc_issuer: "https://{{ ansible_fqdn }}/idp"
+sigstore_fulcio_oidc_client_id: sigstore
+sigstore_fulcio_oidc_type: email
+ipa_realm: "{{ ansible_domain | upper }}"

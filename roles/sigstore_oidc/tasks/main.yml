@@ -1,0 +1,14 @@
+---
+- name: Register sigstore OIDC client in ahdapa
+  ansible.builtin.include_tasks: ahdapa.yml
+  when: sigstore_oidc_provider == 'ahdapa'
+  tags: sigstore_oidc
+
+- name: Register sigstore OIDC client in Keycloak
+  ansible.builtin.include_tasks: keycloak.yml
+  when: sigstore_oidc_provider == 'keycloak'
+  tags: sigstore_oidc
+
+- name: Configure IPA service principal and HBAC
+  ansible.builtin.include_tasks: ipa-objects.yml
+  tags: sigstore_oidc

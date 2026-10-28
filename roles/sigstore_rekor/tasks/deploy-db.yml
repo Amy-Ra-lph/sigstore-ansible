@@ -1,0 +1,49 @@
+---
+- name: Template MariaDB quadlet
+  ansible.builtin.template:
+    src: rekor-db.container.j2
+    dest: /etc/containers/systemd/rekor-db.container
+    mode: "0644"
+  notify:
+    - Daemon reload
+    - Restart rekor-db
+
+- name: Flush handlers to start MariaDB
+  ansible.builtin.meta: flush_handlers
+
+- name: Start MariaDB service
+  ansible.builtin.systemd:
+    name: rekor-db
+    state: started
+    daemon_reload: true
+
+- name: Wait for MariaDB to accept connections
+  ansible.builtin.command:
+    cmd: >-
+      podman exec rekor-db mysqladmin ping
+      -u {{ sigstore_rekor_db_user }}
+      -p{{ sigstore_rekor_db_password }}
+  register: _mariadb_ping
+  until: _mariadb_ping.rc == 0
+  retries: 30
+  delay: 2
+  changed_when: false
+
+- name: Download Trillian schema
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/google/trillian/master/storage/mysql/schema/storage.sql
+    dest: /tmp/trillian-schema.sql
+    mode: "0644"
+  register: _schema_download
+  failed_when: false
+
+- name: Load Trillian schema into MariaDB
+  ansible.builtin.shell: |
+    podman exec -i rekor-db mysql \
+      -u {{ sigstore_rekor_db_user }} \
+      -p{{ sigstore_rekor_db_password }} \
+      {{ sigstore_rekor_db_name }} < /tmp/trillian-schema.sql
+  register: _schema_load
+  changed_when: "'already exists' not in _schema_load.stderr"
+  failed_when: false
+  when: _schema_download is not failed

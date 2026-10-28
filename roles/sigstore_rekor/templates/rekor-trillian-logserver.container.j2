@@ -1,0 +1,21 @@
+[Unit]
+Description=Trillian Log Server
+After=rekor-db.service
+
+[Container]
+Image=localhost/trillian-logserver-ipa:latest
+ContainerName=rekor-trillian-logserver
+
+Environment=MYSQL_URI={{ sigstore_rekor_mysql_uri }}
+
+PublishPort={{ sigstore_rekor_trillian_grpc_port }}:8090
+PublishPort={{ sigstore_rekor_trillian_logserver_port }}:8092
+
+PodmanArgs=--security-opt no-new-privileges
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

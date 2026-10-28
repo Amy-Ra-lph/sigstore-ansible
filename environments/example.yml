@@ -1,0 +1,9 @@
+---
+# Example environment variables for sigstore deployment
+# Copy this file and fill in real values before running playbooks.
+
+vault_ipaadmin_password: "changeme"
+vault_ldap_bind_password: "changeme"
+vault_kc_admin_password: "changeme"
+vault_sigstore_rekor_db_password: "changeme"
+vault_sigstore_rekor_db_root_password: "changeme"

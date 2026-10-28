@@ -1,0 +1,46 @@
+---
+- name: Get Keycloak admin token
+  ansible.builtin.uri:
+    url: "{{ sigstore_oidc_keycloak_url }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: admin-cli
+      username: "{{ sigstore_oidc_keycloak_admin }}"
+      password: "{{ sigstore_oidc_keycloak_password }}"
+      grant_type: password
+    status_code: 200
+  register: _kc_token
+  no_log: true
+  tags: sigstore_oidc
+
+- name: Check if sigstore client exists in Keycloak
+  ansible.builtin.uri:
+    url: "{{ sigstore_oidc_keycloak_url }}/admin/realms/{{ sigstore_oidc_keycloak_realm }}/clients?clientId={{ sigstore_oidc_client_id }}"
+    headers:
+      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+    status_code: 200
+  register: _kc_client_check
+  tags: sigstore_oidc
+
+- name: Create sigstore client in Keycloak
+  ansible.builtin.uri:
+    url: "{{ sigstore_oidc_keycloak_url }}/admin/realms/{{ sigstore_oidc_keycloak_realm }}/clients"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _kc_token.json.access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      clientId: "{{ sigstore_oidc_client_id }}"
+      name: "{{ sigstore_oidc_client_name }}"
+      publicClient: true
+      standardFlowEnabled: false
+      directAccessGrantsEnabled: false
+      attributes:
+        oauth2.device.authorization.grant.enabled: "true"
+    status_code:
+      - 201
+      - 409
+  when: _kc_client_check.json | length == 0
+  tags: sigstore_oidc

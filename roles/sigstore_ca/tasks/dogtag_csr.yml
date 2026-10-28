@@ -1,0 +1,150 @@
+---
+# Generate key locally, get cert signed by Dogtag/RHCS.
+# Key stays on disk — Dogtag only signs the CSR.
+
+- name: Check if CA key already exists
+  ansible.builtin.stat:
+    path: "{{ sigstore_ca_dir }}/ca-key.pem"
+  register: _dogtag_csr_key
+
+- name: Generate CA private key
+  ansible.builtin.command:
+    cmd: >-
+      openssl genpkey
+      -algorithm {{ sigstore_ca_key_algorithm }}
+      -pkeyopt rsa_keygen_bits:{{ sigstore_ca_key_size }}
+      {% if sigstore_ca_dogtag_key_passphrase %}-aes256 -pass pass:{{ sigstore_ca_dogtag_key_passphrase }}{% endif %}
+      -out {{ sigstore_ca_dir }}/ca-key.pem
+  when: not _dogtag_csr_key.stat.exists
+  no_log: true
+
+- name: Set CA key permissions
+  ansible.builtin.file:
+    path: "{{ sigstore_ca_dir }}/ca-key.pem"
+    mode: "0600"
+
+- name: Write CA key passphrase file
+  ansible.builtin.copy:
+    content: "{{ sigstore_ca_dogtag_key_passphrase }}"
+    dest: "{{ sigstore_ca_dir }}/ca-key.passwd"
+    mode: "0600"
+  when: sigstore_ca_dogtag_key_passphrase | length > 0
+  no_log: true
+
+- name: Check if CA cert already exists
+  ansible.builtin.stat:
+    path: "{{ sigstore_ca_dir }}/ca-cert.pem"
+  register: _dogtag_csr_cert
+
+- name: Generate CSR for sub-CA certificate
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -new
+      -key {{ sigstore_ca_dir }}/ca-key.pem
+      {% if sigstore_ca_dogtag_key_passphrase %}-passin pass:{{ sigstore_ca_dogtag_key_passphrase }}{% endif %}
+      -out {{ sigstore_ca_dir }}/fulcio-subca.csr
+      -subj "/{{ sigstore_ca_subject }}"
+      -addext "basicConstraints=critical,CA:TRUE,pathlen:0"
+      -addext "keyUsage=critical,keyCertSign,cRLSign"
+      -addext "subjectKeyIdentifier=hash"
+    creates: "{{ sigstore_ca_dir }}/fulcio-subca.csr"
+  when: not _dogtag_csr_cert.stat.exists
+  no_log: true
+
+- name: Obtain Kerberos ticket
+  ansible.builtin.command:
+    cmd: kinit admin@{{ ipa_realm }}
+    stdin: "{{ ipa_admin_password }}"
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  changed_when: false
+  no_log: true
+  when: not _dogtag_csr_cert.stat.exists
+
+# Dogtag's default profiles reject CA:TRUE — need a custom profile
+- name: Check if Dogtag sub-CA profile exists
+  ansible.builtin.command:
+    cmd: ipa certprofile-show {{ sigstore_ca_dogtag_profile_id }}
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  register: _dogtag_profile_check
+  failed_when: false
+  changed_when: false
+  when: not _dogtag_csr_cert.stat.exists
+
+- name: Import Dogtag sub-CA certificate profile
+  ansible.builtin.command:
+    cmd: >-
+      ipa certprofile-import {{ sigstore_ca_dogtag_profile_id }}
+      --file={{ sigstore_ca_dir }}/caFulcioSubCA.cfg
+      --desc="{{ sigstore_ca_dogtag_profile_desc }}"
+      --store=true
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  when:
+    - not _dogtag_csr_cert.stat.exists
+    - _dogtag_profile_check.rc != 0
+
+- name: Copy Dogtag profile config
+  ansible.builtin.copy:
+    src: caFulcioSubCA.cfg
+    dest: "{{ sigstore_ca_dir }}/caFulcioSubCA.cfg"
+    mode: "0644"
+  when:
+    - not _dogtag_csr_cert.stat.exists
+    - _dogtag_profile_check.rc != 0
+
+- name: Ensure sigstore service principal exists
+  freeipa.ansible_freeipa.ipaservice:
+    ipaadmin_password: "{{ ipa_admin_password }}"
+    name: "{{ sigstore_ca_dogtag_service_principal }}"
+    state: present
+  when: not _dogtag_csr_cert.stat.exists
+
+- name: Check if CA ACL exists
+  ansible.builtin.command:
+    cmd: ipa caacl-show fulcio-subca-acl
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  register: _dogtag_acl_check
+  failed_when: false
+  changed_when: false
+  when: not _dogtag_csr_cert.stat.exists
+
+- name: Create CA ACL for sub-CA profile
+  ansible.builtin.shell: |
+    ipa caacl-add fulcio-subca-acl --desc="Allow Fulcio sub-CA cert issuance"
+    ipa caacl-add-ca fulcio-subca-acl --cas={{ sigstore_ca_dogtag_ca }}
+    ipa caacl-add-profile fulcio-subca-acl --certprofiles={{ sigstore_ca_dogtag_profile_id }}
+    ipa caacl-add-service fulcio-subca-acl --services={{ sigstore_ca_dogtag_service_principal }}
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  when:
+    - not _dogtag_csr_cert.stat.exists
+    - _dogtag_acl_check.rc != 0
+
+- name: Submit CSR to Dogtag via IPA
+  ansible.builtin.command:
+    cmd: >-
+      ipa cert-request {{ sigstore_ca_dir }}/fulcio-subca.csr
+      --principal={{ sigstore_ca_dogtag_service_principal }}
+      --profile-id={{ sigstore_ca_dogtag_profile_id }}
+      --ca={{ sigstore_ca_dogtag_ca }}
+      --certificate-out={{ sigstore_ca_dir }}/ca-cert.pem
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  when: not _dogtag_csr_cert.stat.exists
+
+- name: Build certificate chain file
+  ansible.builtin.shell: |
+    cat {{ sigstore_ca_dir }}/ca-cert.pem /etc/ipa/ca.crt > {{ sigstore_ca_dir }}/ca-chain.pem
+  args:
+    creates: "{{ sigstore_ca_dir }}/ca-chain.pem"
+
+- name: Destroy temporary Kerberos ticket
+  ansible.builtin.command:
+    cmd: kdestroy
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  changed_when: false
+  failed_when: false

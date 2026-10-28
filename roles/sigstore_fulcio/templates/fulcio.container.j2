@@ -1,0 +1,26 @@
+[Unit]
+Description=Fulcio Keyless Code Signing CA (IPA Subsystem)
+After=ahdapa.service
+Wants=ahdapa.service
+
+[Container]
+Image={{ sigstore_fulcio_image }}
+ContainerName=fulcio
+
+EnvironmentFile={{ sigstore_fulcio_config_dir }}/fulcio-env
+
+Volume={{ sigstore_fulcio_config_dir }}/fulcio-config.json:/etc/fulcio-config/config.json:ro,z
+Volume={{ sigstore_fulcio_ca_cert }}:/etc/fulcio-config/fulcio-intermediate.crt:ro,z
+Volume={{ sigstore_fulcio_ca_chain }}:/etc/fulcio-config/fulcio-chain.crt:ro,z
+Volume={{ sigstore_fulcio_ca_key }}:/etc/fulcio-config/fulcio-key.pem:ro,z
+
+PublishPort={{ sigstore_fulcio_port }}:8080
+
+PodmanArgs=--security-opt no-new-privileges
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

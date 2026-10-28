@@ -1,0 +1,22 @@
+---
+sigstore_rekor_version: "v1.3.8"
+sigstore_rekor_trillian_version: "v1.6.1"
+sigstore_rekor_cosign_version: "v2.4.1"
+sigstore_rekor_port: 3000
+sigstore_rekor_db_port: 3307
+sigstore_rekor_db_name: trillian
+sigstore_rekor_db_user: trillian
+sigstore_rekor_db_password: "{{ vault_sigstore_rekor_db_password | default('trillian') }}"
+sigstore_rekor_db_root_password: "{{ vault_sigstore_rekor_db_root_password | default('rekorroot') }}"
+sigstore_rekor_db_host: "{{ groups['sigstore_db'][0] | default(ansible_fqdn) }}"
+sigstore_rekor_db_image: "docker.io/library/mariadb:10.11"
+sigstore_rekor_trillian_grpc_port: 8090
+sigstore_rekor_trillian_signer_port: 8091
+sigstore_rekor_trillian_logserver_port: 8092
+sigstore_rekor_is_signer: false
+sigstore_rekor_is_db: false
+sigstore_rekor_config_dir: /etc/ipa/sigstore
+sigstore_rekor_build_images: true
+sigstore_rekor_install_cosign: true
+sigstore_rekor_mysql_uri: >-
+  {{ sigstore_rekor_db_user }}:{{ sigstore_rekor_db_password }}@tcp({{ sigstore_rekor_db_host }}:{{ sigstore_rekor_db_port }})/{{ sigstore_rekor_db_name }}

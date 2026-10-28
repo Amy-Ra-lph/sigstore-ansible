@@ -1,0 +1,89 @@
+---
+- name: Obtain Kerberos ticket
+  ansible.builtin.command:
+    cmd: kinit admin@{{ ipa_realm }}
+    stdin: "{{ ipa_admin_password }}"
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  changed_when: false
+  no_log: true
+
+- name: Check if sub-CA exists
+  ansible.builtin.command:
+    cmd: ipa ca-show {{ sigstore_ca_name }}
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  register: sigstore_ca_check
+  failed_when: false
+  changed_when: false
+
+- name: Create IPAthinCA sub-CA for Fulcio
+  ansible.builtin.command:
+    cmd: >-
+      ipa ca-add {{ sigstore_ca_name }}
+      --subject="{{ sigstore_ca_subject }}"
+      --desc="{{ sigstore_ca_description }}"
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  when: sigstore_ca_check.rc != 0
+
+- name: Wait for IPAthinCA to generate sub-CA certificate
+  ansible.builtin.wait_for:
+    path: "{{ sigstore_ca_ipathinca_subcas_dir }}/{{ sigstore_ca_name }}/ca.crt"
+    timeout: "{{ sigstore_ca_wait_timeout }}"
+
+- name: Copy sub-CA certificate
+  ansible.builtin.copy:
+    src: "{{ sigstore_ca_ipathinca_subcas_dir }}/{{ sigstore_ca_name }}/ca.crt"
+    dest: "{{ sigstore_ca_dir }}/ca-cert.pem"
+    mode: "0644"
+    remote_src: true
+
+- name: Check for unencrypted sub-CA key
+  ansible.builtin.stat:
+    path: "{{ sigstore_ca_ipathinca_subcas_dir }}/{{ sigstore_ca_name }}/ca.key"
+  register: sigstore_ca_key_plain
+
+- name: Check for encrypted sub-CA key
+  ansible.builtin.stat:
+    path: "{{ sigstore_ca_ipathinca_subcas_dir }}/{{ sigstore_ca_name }}/ca.key.enc"
+  register: sigstore_ca_key_enc
+  when: not sigstore_ca_key_plain.stat.exists
+
+- name: Copy unencrypted sub-CA key
+  ansible.builtin.copy:
+    src: "{{ sigstore_ca_ipathinca_subcas_dir }}/{{ sigstore_ca_name }}/ca.key"
+    dest: "{{ sigstore_ca_dir }}/ca-key.pem"
+    mode: "0600"
+    remote_src: true
+  when: sigstore_ca_key_plain.stat.exists
+
+- name: Copy encrypted sub-CA key
+  ansible.builtin.copy:
+    src: "{{ sigstore_ca_ipathinca_subcas_dir }}/{{ sigstore_ca_name }}/ca.key.enc"
+    dest: "{{ sigstore_ca_dir }}/ca-key.pem"
+    mode: "0600"
+    remote_src: true
+  when: not sigstore_ca_key_plain.stat.exists and (sigstore_ca_key_enc.stat.exists | default(false))
+
+# IPAthinCA uses the IPA admin password for sub-CA key encryption
+- name: Write CA key passphrase file for encrypted key
+  ansible.builtin.copy:
+    content: "{{ ipa_admin_password }}"
+    dest: "{{ sigstore_ca_dir }}/ca-key.passwd"
+    mode: "0600"
+  when: not sigstore_ca_key_plain.stat.exists and (sigstore_ca_key_enc.stat.exists | default(false))
+  no_log: true
+
+- name: Fail if no sub-CA key found
+  ansible.builtin.fail:
+    msg: "No sub-CA key found at {{ sigstore_ca_ipathinca_subcas_dir }}/{{ sigstore_ca_name }}/ (expected ca.key or ca.key.enc)"
+  when: not sigstore_ca_key_plain.stat.exists and not (sigstore_ca_key_enc.stat.exists | default(false))
+
+- name: Destroy temporary Kerberos ticket
+  ansible.builtin.command:
+    cmd: kdestroy
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  changed_when: false
+  failed_when: false

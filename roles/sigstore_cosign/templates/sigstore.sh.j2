@@ -1,0 +1,13 @@
+# Private Sigstore environment for IPA-integrated deployment
+export SIGSTORE_CT_LOG_PUBLIC_KEY_FILE=""
+export SIGSTORE_ROOT_FILE="{{ sigstore_cosign_trust_root_dir }}/fulcio-root.pem"
+
+alias cosign-sign='cosign sign-blob \
+  --fulcio-url={{ sigstore_cosign_fulcio_url }} \
+  --rekor-url={{ sigstore_cosign_rekor_url }} \
+  --insecure-skip-verify --yes'
+
+alias cosign-verify='cosign verify-blob \
+  --certificate-chain={{ sigstore_cosign_trust_root_dir }}/fulcio-root.pem \
+  --insecure-ignore-sct \
+  --rekor-url={{ sigstore_cosign_rekor_url }}'

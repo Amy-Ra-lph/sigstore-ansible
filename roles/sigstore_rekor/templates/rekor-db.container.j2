@@ -1,0 +1,24 @@
+[Unit]
+Description=MariaDB for Trillian (Rekor backend)
+
+[Container]
+Image={{ sigstore_rekor_db_image }}
+ContainerName=rekor-db
+
+Environment=MYSQL_ROOT_PASSWORD={{ sigstore_rekor_db_root_password }}
+Environment=MYSQL_DATABASE={{ sigstore_rekor_db_name }}
+Environment=MYSQL_USER={{ sigstore_rekor_db_user }}
+Environment=MYSQL_PASSWORD={{ sigstore_rekor_db_password }}
+
+PublishPort={{ sigstore_rekor_db_port }}:3306
+
+Volume=rekor-db-data:/var/lib/mysql:Z
+
+PodmanArgs=--security-opt no-new-privileges
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

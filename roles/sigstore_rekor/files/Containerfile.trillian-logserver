@@ -1,0 +1,22 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+RUN microdnf install -y shadow-utils && microdnf clean all && \
+    useradd -r -s /sbin/nologin trillian
+
+# Trillian log server binary (extracted from official image)
+COPY trillian_log_server /usr/local/bin/trillian_log_server
+RUN chmod 755 /usr/local/bin/trillian_log_server
+
+# createtree for Merkle tree initialization (one-shot)
+COPY createtree /usr/local/bin/createtree
+RUN chmod 755 /usr/local/bin/createtree
+
+COPY trillian-logserver-start.sh /usr/local/bin/trillian-logserver-start.sh
+RUN chmod 755 /usr/local/bin/trillian-logserver-start.sh
+
+USER trillian
+
+# gRPC=8090, HTTP metrics=8092
+EXPOSE 8090 8092
+
+ENTRYPOINT ["/usr/local/bin/trillian-logserver-start.sh"]

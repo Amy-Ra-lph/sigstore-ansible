@@ -1,0 +1,47 @@
+---
+- name: Read tree ID from file
+  ansible.builtin.slurp:
+    src: "{{ sigstore_rekor_config_dir }}/rekor-tree-id"
+  register: _rekor_tree_id_raw
+  when: sigstore_rekor_tree_id is not defined
+
+- name: Set tree ID fact if not already set
+  ansible.builtin.set_fact:
+    sigstore_rekor_tree_id: "{{ (_rekor_tree_id_raw.content | b64decode).strip() }}"
+  when: sigstore_rekor_tree_id is not defined
+
+- name: Template Rekor environment file
+  ansible.builtin.template:
+    src: rekor-env.j2
+    dest: "{{ sigstore_rekor_config_dir }}/rekor-env"
+    mode: "0644"
+  notify:
+    - Restart rekor-server
+
+- name: Template Rekor quadlet
+  ansible.builtin.template:
+    src: rekor.container.j2
+    dest: /etc/containers/systemd/rekor-server.container
+    mode: "0644"
+  notify:
+    - Daemon reload
+    - Restart rekor-server
+
+- name: Flush handlers to deploy Rekor
+  ansible.builtin.meta: flush_handlers
+
+- name: Start Rekor service
+  ansible.builtin.systemd:
+    name: rekor-server
+    state: started
+    daemon_reload: true
+
+- name: Wait for Rekor API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ sigstore_rekor_port }}/api/v1/log"
+    return_content: true
+  register: _rekor_health
+  until: _rekor_health.status == 200
+  retries: 30
+  delay: 3
+  failed_when: false

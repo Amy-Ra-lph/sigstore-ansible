@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  role_name: sigstore_cosign
+  description: Install cosign and configure trust root for private Sigstore
+  license: Apache-2.0
+dependencies: []

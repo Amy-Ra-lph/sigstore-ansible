@@ -1,0 +1,24 @@
+---
+- name: Template Trillian log_signer quadlet
+  ansible.builtin.template:
+    src: rekor-trillian-signer.container.j2
+    dest: /etc/containers/systemd/rekor-trillian-signer.container
+    mode: "0644"
+  notify:
+    - Daemon reload
+    - Restart rekor-trillian-signer
+
+- name: Flush handlers to deploy signer
+  ansible.builtin.meta: flush_handlers
+
+- name: Start Trillian log_signer service
+  ansible.builtin.systemd:
+    name: rekor-trillian-signer
+    state: started
+    daemon_reload: true
+
+- name: Wait for log_signer to start
+  ansible.builtin.wait_for:
+    port: "{{ sigstore_rekor_trillian_signer_port }}"
+    host: 127.0.0.1
+    timeout: 30

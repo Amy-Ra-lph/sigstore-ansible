@@ -1,0 +1,24 @@
+---
+- name: Daemon reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart rekor-db
+  ansible.builtin.systemd:
+    name: rekor-db
+    state: restarted
+
+- name: Restart rekor-trillian-signer
+  ansible.builtin.systemd:
+    name: rekor-trillian-signer
+    state: restarted
+
+- name: Restart rekor-trillian-logserver
+  ansible.builtin.systemd:
+    name: rekor-trillian-logserver
+    state: restarted
+
+- name: Restart rekor-server
+  ansible.builtin.systemd:
+    name: rekor-server
+    state: restarted

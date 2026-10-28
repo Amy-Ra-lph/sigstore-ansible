@@ -1,0 +1,56 @@
+---
+- name: Check if cosign is installed
+  ansible.builtin.stat:
+    path: "{{ sigstore_cosign_bin }}"
+  register: _cosign_stat
+  tags: sigstore_cosign
+
+- name: Set cosign architecture
+  ansible.builtin.set_fact:
+    _cosign_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+  when: not _cosign_stat.stat.exists
+  tags: sigstore_cosign
+
+- name: Download cosign binary
+  ansible.builtin.get_url:
+    url: "https://github.com/sigstore/cosign/releases/download/{{ sigstore_cosign_version }}/cosign-linux-{{ _cosign_arch }}"
+    dest: "{{ sigstore_cosign_bin }}"
+    mode: "0755"
+  when: not _cosign_stat.stat.exists
+  tags: sigstore_cosign
+
+- name: Create trust root directory
+  ansible.builtin.file:
+    path: "{{ sigstore_cosign_trust_root_dir }}"
+    state: directory
+    mode: "0755"
+  when: sigstore_cosign_configure_trust
+  tags: sigstore_cosign
+
+- name: Fetch Fulcio trust bundle
+  ansible.builtin.uri:
+    url: "{{ sigstore_cosign_fulcio_url }}/api/v2/trustBundle"
+    return_content: true
+  register: _fulcio_bundle
+  when: sigstore_cosign_configure_trust
+  failed_when: false
+  tags: sigstore_cosign
+
+- name: Extract certificates from trust bundle
+  ansible.builtin.copy:
+    content: "{{ _fulcio_bundle.json.chains | map(attribute='certificates') | flatten | join('\n') }}"
+    dest: "{{ sigstore_cosign_trust_root_dir }}/fulcio-root.pem"
+    mode: "0644"
+  when:
+    - sigstore_cosign_configure_trust
+    - _fulcio_bundle is succeeded
+    - _fulcio_bundle.json is defined
+  tags: sigstore_cosign
+
+- name: Install sigstore environment script
+  ansible.builtin.template:
+    src: sigstore.sh.j2
+    dest: /etc/profile.d/sigstore.sh
+    mode: "0644"
+  when: sigstore_cosign_configure_trust
+  tags: sigstore_cosign

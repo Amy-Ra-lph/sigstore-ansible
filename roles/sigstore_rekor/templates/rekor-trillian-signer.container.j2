@@ -1,0 +1,20 @@
+[Unit]
+Description=Trillian Log Signer (singleton)
+After=rekor-db.service
+
+[Container]
+Image=localhost/trillian-signer-ipa:latest
+ContainerName=rekor-trillian-signer
+
+Environment=MYSQL_URI={{ sigstore_rekor_mysql_uri }}
+
+PublishPort={{ sigstore_rekor_trillian_signer_port }}:8091
+
+PodmanArgs=--security-opt no-new-privileges
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

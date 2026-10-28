@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: sigstore_fulcio
+  description: Deploy Fulcio keyless signing CA as Podman Quadlet
+  license: Apache-2.0
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+        - "10"
+dependencies: []

@@ -1,0 +1,22 @@
+---
+sigstore_oidc_provider: ahdapa
+sigstore_oidc_client_id: sigstore
+sigstore_oidc_client_name: "Sigstore/Fulcio Code Signing"
+sigstore_oidc_scopes:
+  - openid
+  - email
+sigstore_oidc_ahdapa_db_path: /var/lib/ahdapa/ahdapa.db
+sigstore_oidc_ahdapa_auth_method: kerberos_client_auth
+sigstore_oidc_ahdapa_grant_types: '["client_credentials"]'
+sigstore_oidc_keycloak_url: "http://{{ ansible_fqdn }}:8180/auth"
+sigstore_oidc_keycloak_realm: ipa
+sigstore_oidc_keycloak_admin: admin
+sigstore_oidc_keycloak_password: "{{ vault_ipaadmin_password }}"
+sigstore_oidc_create_service: true
+sigstore_oidc_service_principal: "sigstore/{{ ansible_fqdn }}"
+sigstore_oidc_create_hbac: true
+sigstore_oidc_hbac_rule_name: allow-sigstore-signing
+sigstore_oidc_hbac_groups: []
+sigstore_oidc_hbac_users: []
+ipa_realm: "{{ ansible_domain | upper }}"
+ipa_admin_password: "{{ vault_ipaadmin_password }}"

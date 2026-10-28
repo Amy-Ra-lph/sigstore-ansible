@@ -1,0 +1,32 @@
+---
+- name: Ensure sigstore service principal exists
+  freeipa.ansible_freeipa.ipaservice:
+    ipaadmin_password: "{{ ipa_admin_password }}"
+    name: "{{ sigstore_oidc_service_principal }}"
+    state: present
+  when: sigstore_oidc_create_service
+  tags: sigstore_oidc
+
+- name: Ensure sigstore-signing HBAC service exists
+  freeipa.ansible_freeipa.ipahbacsvc:
+    ipaadmin_password: "{{ ipa_admin_password }}"
+    name: sigstore-signing
+    description: "Sigstore code signing access"
+    state: present
+  when: sigstore_oidc_create_hbac
+  tags: sigstore_oidc
+
+- name: Ensure sigstore signing HBAC rule exists
+  freeipa.ansible_freeipa.ipahbacrule:
+    ipaadmin_password: "{{ ipa_admin_password }}"
+    name: "{{ sigstore_oidc_hbac_rule_name }}"
+    description: "Allow specified users/groups to use Sigstore signing"
+    hbacsvc:
+      - sigstore-signing
+    user: "{{ sigstore_oidc_hbac_users }}"
+    group: "{{ sigstore_oidc_hbac_groups }}"
+    state: present
+  when:
+    - sigstore_oidc_create_hbac
+    - (sigstore_oidc_hbac_users | length > 0) or (sigstore_oidc_hbac_groups | length > 0)
+  tags: sigstore_oidc

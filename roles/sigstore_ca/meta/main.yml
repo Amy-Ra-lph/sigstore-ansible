@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  role_name: sigstore_ca
+  description: Create IPAthinCA sub-CA for Fulcio and export certificates
+  license: Apache-2.0
+dependencies: []

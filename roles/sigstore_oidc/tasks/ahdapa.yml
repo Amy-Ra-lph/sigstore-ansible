@@ -1,0 +1,51 @@
+---
+- name: Check if sigstore client exists in ahdapa
+  ansible.builtin.command:
+    cmd: >-
+      sqlite3 {{ sigstore_oidc_ahdapa_db_path }}
+      "SELECT client_id FROM crdt_clients WHERE client_id='{{ sigstore_oidc_client_id }}';"
+  register: _ahdapa_client_check
+  changed_when: false
+  failed_when: false
+  tags: sigstore_oidc
+
+- name: Register sigstore client in ahdapa
+  ansible.builtin.command:
+    cmd: >-
+      sqlite3 {{ sigstore_oidc_ahdapa_db_path }}
+      "INSERT OR IGNORE INTO crdt_clients (
+        client_id, client_name, redirect_uris, scopes,
+        token_endpoint_auth_method, grant_types,
+        kerberos_principal_pattern,
+        source, created_at, tombstone,
+        allow_token_exchange_actor, skip_consent, localhost_only
+      ) VALUES (
+        '{{ sigstore_oidc_client_id }}',
+        '{{ sigstore_oidc_client_name }}',
+        '[]',
+        '{{ sigstore_oidc_scopes | to_json }}',
+        '{{ sigstore_oidc_ahdapa_auth_method }}',
+        '{{ sigstore_oidc_ahdapa_grant_types }}',
+        '*@{{ ipa_realm }}',
+        'static',
+        strftime('%s','now'),
+        0, 0, 1, 0
+      );"
+  when: sigstore_oidc_client_id not in (_ahdapa_client_check.stdout | default(''))
+  notify: Restart ahdapa
+  tags: sigstore_oidc
+
+- name: Flush handlers to restart ahdapa
+  ansible.builtin.meta: flush_handlers
+  tags: sigstore_oidc
+
+- name: Wait for ahdapa OIDC discovery endpoint
+  ansible.builtin.uri:
+    url: "https://{{ ansible_fqdn }}/idp/.well-known/openid-configuration"
+    validate_certs: false
+    status_code: 200
+  register: _ahdapa_oidc
+  retries: 10
+  delay: 3
+  until: _ahdapa_oidc.status == 200
+  tags: sigstore_oidc

@@ -1,0 +1,18 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+RUN microdnf install -y shadow-utils && microdnf clean all && \
+    useradd -r -s /sbin/nologin trillian
+
+# Trillian log signer binary (extracted from official image)
+COPY trillian_log_signer /usr/local/bin/trillian_log_signer
+RUN chmod 755 /usr/local/bin/trillian_log_signer
+
+COPY trillian-signer-start.sh /usr/local/bin/trillian-signer-start.sh
+RUN chmod 755 /usr/local/bin/trillian-signer-start.sh
+
+USER trillian
+
+# HTTP metrics=8091
+EXPOSE 8091
+
+ENTRYPOINT ["/usr/local/bin/trillian-signer-start.sh"]

@@ -1,0 +1,31 @@
+[Unit]
+Description=Fulcio Keyless Code Signing CA (PKCS#11 signer)
+After=network.target
+
+[Container]
+Image={{ sigstore_fulcio_image }}
+ContainerName=fulcio
+
+# OIDC config
+Volume={{ sigstore_fulcio_config_dir }}/fulcio-config.json:/etc/fulcio-config/config.json:ro,z
+
+# CA certificate (public cert only — key stays in HSM/NSS DB)
+Volume={{ sigstore_fulcio_pkcs11_ca_cert }}:/etc/fulcio-config/fulcio-ca.crt:ro,z
+
+# PKCS#11 configuration (contains token/key/pin references)
+Volume={{ sigstore_fulcio_pkcs11_config }}:/etc/fulcio-config/pkcs11-config.json:ro,z
+
+# Mount PKCS#11 module library and NSS DB into container
+Volume={{ sigstore_ca_pkcs11_module | default('/usr/lib64/libsoftokn3.so') }}:{{ sigstore_ca_pkcs11_module | default('/usr/lib64/libsoftokn3.so') }}:ro
+Volume={{ sigstore_ca_nss_db | default('/var/lib/pki/pki-tomcat/alias') }}:/var/lib/pki/pki-tomcat/alias:ro,z
+
+PublishPort={{ sigstore_fulcio_port }}:8080
+
+PodmanArgs=--security-opt no-new-privileges
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

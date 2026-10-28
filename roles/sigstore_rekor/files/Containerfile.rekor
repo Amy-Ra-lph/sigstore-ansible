@@ -1,0 +1,27 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+# Create non-root user
+RUN microdnf install -y shadow-utils && microdnf clean all && \
+    useradd -r -s /sbin/nologin rekor
+
+# Copy Rekor binary (extracted from ghcr.io/sigstore/rekor-server)
+COPY rekor-server /usr/local/bin/rekor-server
+RUN chmod 755 /usr/local/bin/rekor-server
+
+# Copy createtree binary (extracted from Trillian, needed for one-shot init)
+COPY createtree /usr/local/bin/createtree
+RUN chmod 755 /usr/local/bin/createtree
+
+# Copy startup script
+COPY rekor-start.sh /usr/local/bin/rekor-start.sh
+RUN chmod 755 /usr/local/bin/rekor-start.sh
+
+# Create data directory for tree ID persistence
+RUN mkdir -p /var/lib/rekor && chown rekor:rekor /var/lib/rekor
+
+USER rekor
+
+# HTTP API port
+EXPOSE 3000
+
+ENTRYPOINT ["/usr/local/bin/rekor-start.sh"]

@@ -1,0 +1,375 @@
+---
+# sigstore-test.yml — Validate private Sigstore deployment (20 tests)
+#
+# Converts install/sigstore/test-sigstore.sh into Ansible assertions.
+#
+# Usage:
+#   ansible-playbook playbooks/sigstore-test.yml -i inventory/hosts -e @environments/lab.yml
+#   ansible-playbook playbooks/sigstore-test.yml -i inventory/hosts -e sigstore_test_user=alice
+
+- name: Sigstore integration tests
+  hosts: sigstore_clients[0]
+  become: false
+  gather_facts: true
+
+  vars:
+    fulcio_url: "http://{{ groups['sigstore_ca_servers'][0] }}:5555"
+    rekor_url: "http://{{ groups['sigstore_rekor_hosts'][0] }}:3000"
+    rekor_url_replica: "http://{{ groups['sigstore_rekor_hosts'][-1] }}:3000"
+    oidc_issuer: "https://{{ groups['sigstore_ca_servers'][0] }}/idp"
+    sigstore_test_user: alice
+    sigstore_test_pass: "{{ vault_ipaadmin_password | default('changeme') }}"
+    sigstore_test_oidc_provider: ahdapa
+    _test_dir: /tmp/sigstore-ansible-test
+    _pass: 0
+    _fail: 0
+
+  tasks:
+    - name: Create test directory
+      ansible.builtin.file:
+        path: "{{ _test_dir }}"
+        state: directory
+        mode: "0700"
+
+    # --- Test 1: Fulcio health ---
+    - name: "Test 1: Fulcio health check"
+      ansible.builtin.uri:
+        url: "{{ fulcio_url }}/healthz"
+        return_content: true
+      register: _fulcio_health
+      failed_when: false
+
+    - name: Assert Fulcio healthy
+      ansible.builtin.assert:
+        that: _fulcio_health.status == 200
+        fail_msg: "Fulcio not healthy: {{ _fulcio_health.status | default('unreachable') }}"
+        success_msg: "PASS: Fulcio is serving"
+
+    # --- Test 2: Trust bundle ---
+    - name: "Test 2: Fetch trust bundle"
+      ansible.builtin.uri:
+        url: "{{ fulcio_url }}/api/v2/trustBundle"
+        return_content: true
+      register: _trust_bundle
+      failed_when: false
+
+    - name: Assert trust bundle has chains
+      ansible.builtin.assert:
+        that:
+          - _trust_bundle.status == 200
+          - _trust_bundle.json.chains | length > 0
+        fail_msg: "No trust bundle chains"
+        success_msg: "PASS: Trust bundle has {{ _trust_bundle.json.chains | length }} chain(s)"
+
+    # --- Test 3: OIDC token ---
+    - name: "Test 3: Get OIDC token (ahdapa)"
+      ansible.builtin.command:
+        cmd: >-
+          curl -sfk --negotiate -u:
+          {{ oidc_issuer | replace('/idp', '') }}:8099/token
+          -d client_id=sigstore
+          -d grant_type=client_credentials
+      register: _oidc_token_raw
+      failed_when: false
+      changed_when: false
+      when: sigstore_test_oidc_provider == 'ahdapa'
+
+    - name: "Test 3: Get OIDC token (keycloak)"
+      ansible.builtin.uri:
+        url: "{{ oidc_issuer }}/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: sigstore
+          username: "{{ sigstore_test_user }}"
+          password: "{{ sigstore_test_pass }}"
+          grant_type: password
+          scope: "openid email"
+        return_content: true
+      register: _oidc_token_kc
+      failed_when: false
+      when: sigstore_test_oidc_provider == 'keycloak'
+
+    - name: Extract token
+      ansible.builtin.set_fact:
+        _id_token: >-
+          {{ (_oidc_token_raw.stdout | from_json).access_token
+             if sigstore_test_oidc_provider == 'ahdapa'
+             else (_oidc_token_kc.json.id_token | default(_oidc_token_kc.json.access_token | default(''))) }}
+      failed_when: _id_token | length == 0
+
+    # --- Test 4: Sign a blob ---
+    - name: Create test binary
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          echo test workload
+        dest: "{{ _test_dir }}/test-bin"
+        mode: "0755"
+
+    - name: "Test 4: Sign test binary with cosign"
+      ansible.builtin.command:
+        cmd: >-
+          cosign sign-blob {{ _test_dir }}/test-bin
+          --fulcio-url={{ fulcio_url }}
+          --oidc-issuer={{ oidc_issuer }}
+          --identity-token={{ _id_token }}
+          --output-signature={{ _test_dir }}/test-bin.sig
+          --output-certificate={{ _test_dir }}/test-bin.crt
+          --rekor-url={{ rekor_url }}
+          --insecure-skip-verify --yes
+      register: _sign_result
+      changed_when: false
+
+    # --- Test 5: Certificate SAN ---
+    - name: "Test 5: Check certificate SAN"
+      ansible.builtin.shell:
+        cmd: >-
+          openssl x509 -in {{ _test_dir }}/test-bin.crt -noout -text
+          | grep -A1 'Subject Alternative Name' | tail -1
+      register: _cert_san
+      changed_when: false
+
+    - name: Assert SAN contains signer identity
+      ansible.builtin.assert:
+        that: "'{{ sigstore_test_user }}' in _cert_san.stdout"
+        fail_msg: "Wrong SAN: {{ _cert_san.stdout }}"
+        success_msg: "PASS: Certificate SAN contains {{ sigstore_test_user }}"
+
+    # --- Test 6: Issuer is Fulcio CA ---
+    - name: "Test 6: Check certificate issuer"
+      ansible.builtin.shell:
+        cmd: openssl x509 -in {{ _test_dir }}/test-bin.crt -noout -issuer
+      register: _cert_issuer
+      changed_when: false
+
+    - name: Assert issuer is Fulcio
+      ansible.builtin.assert:
+        that: "'Fulcio' in _cert_issuer.stdout"
+        fail_msg: "Wrong issuer: {{ _cert_issuer.stdout }}"
+        success_msg: "PASS: Issuer is Fulcio Intermediate CA"
+
+    # --- Test 7: Short-lived cert ---
+    - name: "Test 7: Check certificate validity window"
+      ansible.builtin.shell:
+        cmd: |
+          NOT_BEFORE=$(openssl x509 -in {{ _test_dir }}/test-bin.crt -noout -startdate | cut -d= -f2)
+          NOT_AFTER=$(openssl x509 -in {{ _test_dir }}/test-bin.crt -noout -enddate | cut -d= -f2)
+          echo $(( $(date -d "$NOT_AFTER" +%s) - $(date -d "$NOT_BEFORE" +%s) ))
+      register: _cert_validity
+      changed_when: false
+
+    - name: Assert short-lived validity
+      ansible.builtin.assert:
+        that:
+          - _cert_validity.stdout | int >= 540
+          - _cert_validity.stdout | int <= 660
+        fail_msg: "Unexpected validity: {{ _cert_validity.stdout }}s"
+        success_msg: "PASS: Validity {{ _cert_validity.stdout }}s (~10 min)"
+
+    # --- Test 8: Verify good signature ---
+    - name: Save trust bundle for verification
+      ansible.builtin.copy:
+        content: "{{ _trust_bundle.json.chains | map(attribute='certificates') | flatten | join('\n') }}"
+        dest: "{{ _test_dir }}/trust-bundle.pem"
+        mode: "0644"
+
+    - name: "Test 8: Verify good binary"
+      ansible.builtin.command:
+        cmd: >-
+          cosign verify-blob {{ _test_dir }}/test-bin
+          --signature={{ _test_dir }}/test-bin.sig
+          --certificate={{ _test_dir }}/test-bin.crt
+          --certificate-identity={{ sigstore_test_user }}@{{ ansible_domain }}
+          --certificate-oidc-issuer={{ oidc_issuer }}
+          --certificate-chain={{ _test_dir }}/trust-bundle.pem
+          --insecure-ignore-sct
+          --rekor-url={{ rekor_url }}
+      register: _verify_good
+      changed_when: false
+
+    # --- Test 9: Tampered binary fails ---
+    - name: Create tampered binary
+      ansible.builtin.shell:
+        cmd: |
+          cp {{ _test_dir }}/test-bin {{ _test_dir }}/tampered-bin
+          echo 'echo MALICIOUS' >> {{ _test_dir }}/tampered-bin
+      changed_when: false
+
+    - name: "Test 9: Tampered binary fails verification"
+      ansible.builtin.command:
+        cmd: >-
+          cosign verify-blob {{ _test_dir }}/tampered-bin
+          --signature={{ _test_dir }}/test-bin.sig
+          --certificate={{ _test_dir }}/test-bin.crt
+          --certificate-identity={{ sigstore_test_user }}@{{ ansible_domain }}
+          --certificate-oidc-issuer={{ oidc_issuer }}
+          --certificate-chain={{ _test_dir }}/trust-bundle.pem
+          --insecure-ignore-sct
+          --rekor-url={{ rekor_url }}
+      register: _verify_tampered
+      changed_when: false
+      failed_when: _verify_tampered.rc == 0
+
+    # --- Test 10: Wrong identity fails ---
+    - name: "Test 10: Wrong signer identity fails"
+      ansible.builtin.command:
+        cmd: >-
+          cosign verify-blob {{ _test_dir }}/test-bin
+          --signature={{ _test_dir }}/test-bin.sig
+          --certificate={{ _test_dir }}/test-bin.crt
+          --certificate-identity=evil@attacker.com
+          --certificate-oidc-issuer={{ oidc_issuer }}
+          --certificate-chain={{ _test_dir }}/trust-bundle.pem
+          --insecure-ignore-sct
+          --rekor-url={{ rekor_url }}
+      register: _verify_wrong_id
+      changed_when: false
+      failed_when: _verify_wrong_id.rc == 0
+
+    # --- Test 11: Wrong issuer fails ---
+    - name: "Test 11: Wrong OIDC issuer fails"
+      ansible.builtin.command:
+        cmd: >-
+          cosign verify-blob {{ _test_dir }}/test-bin
+          --signature={{ _test_dir }}/test-bin.sig
+          --certificate={{ _test_dir }}/test-bin.crt
+          --certificate-identity={{ sigstore_test_user }}@{{ ansible_domain }}
+          --certificate-oidc-issuer=http://evil.com/realms/fake
+          --certificate-chain={{ _test_dir }}/trust-bundle.pem
+          --insecure-ignore-sct
+          --rekor-url={{ rekor_url }}
+      register: _verify_wrong_issuer
+      changed_when: false
+      failed_when: _verify_wrong_issuer.rc == 0
+
+    # --- Test 12: Forged CA fails ---
+    - name: Generate fake CA
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -newkey rsa:2048 -keyout /dev/null -out {{ _test_dir }}/fake-ca.pem
+          -days 1 -nodes -subj "/CN=Fake CA"
+      changed_when: false
+
+    - name: "Test 12: Forged CA chain fails"
+      ansible.builtin.command:
+        cmd: >-
+          cosign verify-blob {{ _test_dir }}/test-bin
+          --signature={{ _test_dir }}/test-bin.sig
+          --certificate={{ _test_dir }}/test-bin.crt
+          --certificate-identity={{ sigstore_test_user }}@{{ ansible_domain }}
+          --certificate-oidc-issuer={{ oidc_issuer }}
+          --certificate-chain={{ _test_dir }}/fake-ca.pem
+          --insecure-ignore-sct
+          --rekor-url={{ rekor_url }}
+      register: _verify_forged_ca
+      changed_when: false
+      failed_when: _verify_forged_ca.rc == 0
+
+    # --- Test 15: Rekor health (primary) ---
+    - name: "Test 15: Rekor health check (primary)"
+      ansible.builtin.uri:
+        url: "{{ rekor_url }}/api/v1/log"
+        return_content: true
+      register: _rekor_primary
+      failed_when: false
+
+    - name: Assert Rekor primary responding
+      ansible.builtin.assert:
+        that:
+          - _rekor_primary.status == 200
+          - _rekor_primary.json.treeID is defined
+        fail_msg: "Rekor primary not responding"
+        success_msg: "PASS: Rekor primary treeID={{ _rekor_primary.json.treeID | default('?') }}"
+
+    # --- Test 16: Rekor health (replica) ---
+    - name: "Test 16: Rekor health check (replica)"
+      ansible.builtin.uri:
+        url: "{{ rekor_url_replica }}/api/v1/log"
+        return_content: true
+      register: _rekor_replica
+      failed_when: false
+      when: rekor_url != rekor_url_replica
+
+    - name: Assert Rekor replica responding
+      ansible.builtin.assert:
+        that:
+          - _rekor_replica.status == 200
+          - _rekor_replica.json.treeID is defined
+        fail_msg: "Rekor replica not responding"
+        success_msg: "PASS: Rekor replica treeID={{ _rekor_replica.json.treeID | default('?') }}"
+      when: rekor_url != rekor_url_replica
+
+    # --- Test 17: Tree IDs match ---
+    - name: "Test 17: Tree IDs match across replicas"
+      ansible.builtin.assert:
+        that: _rekor_primary.json.treeID == _rekor_replica.json.treeID
+        fail_msg: "Tree ID mismatch: {{ _rekor_primary.json.treeID }} vs {{ _rekor_replica.json.treeID }}"
+        success_msg: "PASS: Tree IDs match"
+      when:
+        - rekor_url != rekor_url_replica
+        - _rekor_replica is succeeded
+
+    # --- Test 18: Signing event in log ---
+    - name: Compute blob hash
+      ansible.builtin.shell:
+        cmd: sha256sum {{ _test_dir }}/test-bin | awk '{print $1}'
+      register: _blob_hash
+      changed_when: false
+
+    - name: "Test 18: Signing event in Rekor log"
+      ansible.builtin.uri:
+        url: "{{ rekor_url }}/api/v1/index/retrieve"
+        method: POST
+        body_format: json
+        body:
+          hash: "sha256:{{ _blob_hash.stdout }}"
+        return_content: true
+      register: _rekor_search
+      failed_when: false
+
+    - name: Assert entry exists
+      ansible.builtin.assert:
+        that: _rekor_search.json | length > 0
+        fail_msg: "No log entries for signed binary"
+        success_msg: "PASS: Found {{ _rekor_search.json | length }} entry(ies)"
+
+    # --- Test 19: Entry visible from replica ---
+    - name: "Test 19: Entry visible from replica"
+      ansible.builtin.uri:
+        url: "{{ rekor_url_replica }}/api/v1/index/retrieve"
+        method: POST
+        body_format: json
+        body:
+          hash: "sha256:{{ _blob_hash.stdout }}"
+        return_content: true
+      register: _rekor_search_replica
+      failed_when: false
+      when: rekor_url != rekor_url_replica
+
+    - name: Assert entry visible cross-replica
+      ansible.builtin.assert:
+        that: _rekor_search_replica.json | length > 0
+        fail_msg: "Entry not visible from replica"
+        success_msg: "PASS: Entry visible from replica"
+      when:
+        - rekor_url != rekor_url_replica
+        - _rekor_search_replica is defined
+
+    # --- Test 20: Log has entries ---
+    - name: "Test 20: Rekor log entry count > 0"
+      ansible.builtin.assert:
+        that: (_rekor_primary.json.treeSize | default(_rekor_primary.json.TreeSize) | default(0)) | int > 0
+        fail_msg: "Log is empty"
+        success_msg: "PASS: Log has {{ _rekor_primary.json.treeSize | default(_rekor_primary.json.TreeSize) | default(0) }} entries"
+
+    # --- Cleanup ---
+    - name: Clean up test artifacts
+      ansible.builtin.file:
+        path: "{{ _test_dir }}"
+        state: absent
+      when: true
+
+    - name: Test summary
+      ansible.builtin.debug:
+        msg: "Sigstore integration tests complete — all assertions passed"

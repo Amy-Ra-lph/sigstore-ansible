@@ -1,0 +1,44 @@
+---
+- name: Create sigstore config directory
+  ansible.builtin.file:
+    path: "{{ sigstore_rekor_config_dir }}"
+    state: directory
+    mode: "0755"
+  tags: sigstore_rekor
+
+- name: Install cosign
+  ansible.builtin.include_tasks: install-cosign.yml
+  when: sigstore_rekor_install_cosign
+  tags: sigstore_rekor
+
+- name: Build container images
+  ansible.builtin.include_tasks: build-images.yml
+  when: sigstore_rekor_build_images
+  tags: sigstore_rekor
+
+- name: Deploy MariaDB
+  ansible.builtin.include_tasks: deploy-db.yml
+  when: sigstore_rekor_is_db
+  tags: sigstore_rekor
+
+- name: Deploy Trillian log_signer
+  ansible.builtin.include_tasks: deploy-signer.yml
+  when: sigstore_rekor_is_signer
+  tags: sigstore_rekor
+
+- name: Deploy Trillian log_server
+  ansible.builtin.include_tasks: deploy-logserver.yml
+  tags: sigstore_rekor
+
+- name: Create Merkle tree
+  ansible.builtin.include_tasks: create-tree.yml
+  when: sigstore_rekor_is_signer
+  tags: sigstore_rekor
+
+- name: Deploy Rekor server
+  ansible.builtin.include_tasks: deploy-rekor.yml
+  tags: sigstore_rekor
+
+- name: Verify deployment
+  ansible.builtin.include_tasks: verify.yml
+  tags: sigstore_rekor

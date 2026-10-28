@@ -1,0 +1,116 @@
+---
+# Key stays in Dogtag NSS DB (or HSM behind it).
+# Fulcio uses PKCS#11 signer — no key file on disk.
+
+- name: Obtain Kerberos ticket
+  ansible.builtin.command:
+    cmd: kinit admin@{{ ipa_realm }}
+    stdin: "{{ ipa_admin_password }}"
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  changed_when: false
+  no_log: true
+
+- name: Check if lightweight CA exists in Dogtag
+  ansible.builtin.command:
+    cmd: ipa ca-show {{ sigstore_ca_name }}
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  register: _dogtag_pkcs11_ca_check
+  failed_when: false
+  changed_when: false
+
+- name: Create lightweight CA in Dogtag
+  ansible.builtin.command:
+    cmd: >-
+      ipa ca-add {{ sigstore_ca_name }}
+      --subject="{{ sigstore_ca_subject }}"
+      --desc="{{ sigstore_ca_description }}"
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  when: _dogtag_pkcs11_ca_check.rc != 0
+
+# Wait for Dogtag to generate the lightweight CA
+- name: Wait for lightweight CA to be ready
+  ansible.builtin.command:
+    cmd: ipa ca-show {{ sigstore_ca_name }} --raw
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  register: _dogtag_pkcs11_ca_ready
+  until: "'ipacaissuerdn' in _dogtag_pkcs11_ca_ready.stdout"
+  retries: 30
+  delay: 2
+  changed_when: false
+
+# Export the sub-CA certificate (cert only — key stays in NSS DB)
+- name: Export lightweight CA certificate
+  ansible.builtin.shell: |
+    ipa ca-show {{ sigstore_ca_name }} --certificate --raw \
+      | grep -A100 'certificate:' \
+      | tail -n+2 \
+      | sed '/^$/d' \
+      > {{ sigstore_ca_dir }}/ca-cert.b64
+    echo "-----BEGIN CERTIFICATE-----" > {{ sigstore_ca_dir }}/ca-cert.pem
+    cat {{ sigstore_ca_dir }}/ca-cert.b64 >> {{ sigstore_ca_dir }}/ca-cert.pem
+    echo "-----END CERTIFICATE-----" >> {{ sigstore_ca_dir }}/ca-cert.pem
+    rm -f {{ sigstore_ca_dir }}/ca-cert.b64
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  args:
+    creates: "{{ sigstore_ca_dir }}/ca-cert.pem"
+
+- name: Set certificate permissions
+  ansible.builtin.file:
+    path: "{{ sigstore_ca_dir }}/ca-cert.pem"
+    mode: "0644"
+
+# Find the key nickname in the NSS DB — Dogtag names lightweight CA keys
+# as "caSigningCert cert-pki-ca <subca-id>"
+- name: Discover sub-CA key nickname in NSS DB
+  ansible.builtin.shell: |
+    certutil -L -d {{ sigstore_ca_nss_db }} 2>/dev/null \
+      | grep -i "{{ sigstore_ca_name }}\|fulcio" \
+      | head -1 \
+      | sed 's/\s*[a-zA-Z,]*$//' \
+      | sed 's/\s*$//'
+  register: _dogtag_pkcs11_nickname
+  changed_when: false
+
+# If nickname discovery fails, construct it from the IPA ca-show output
+- name: Construct key nickname from CA ID
+  ansible.builtin.shell: |
+    ipa ca-show {{ sigstore_ca_name }} --raw \
+      | grep 'ipacaid:' \
+      | awk '{print $2}'
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  register: _dogtag_pkcs11_caid
+  changed_when: false
+  when: _dogtag_pkcs11_nickname.stdout | length == 0
+
+- name: Set PKCS#11 key label fact
+  ansible.builtin.set_fact:
+    sigstore_ca_pkcs11_key_label: >-
+      {{ _dogtag_pkcs11_nickname.stdout | default('caSigningCert cert-pki-ca ' + (_dogtag_pkcs11_caid.stdout | default(sigstore_ca_name))) }}
+
+# Write PKCS#11 config for Fulcio
+- name: Write PKCS#11 configuration
+  ansible.builtin.copy:
+    content: |
+      {
+        "Path": "{{ sigstore_ca_pkcs11_module }}",
+        "TokenLabel": "{{ sigstore_ca_pkcs11_token }}",
+        "KeyLabel": "{{ sigstore_ca_pkcs11_key_label | trim }}",
+        "Pin": "{{ sigstore_ca_pkcs11_pin }}"
+      }
+    dest: "{{ sigstore_ca_dir }}/pkcs11-config.json"
+    mode: "0600"
+  no_log: true
+
+- name: Destroy temporary Kerberos ticket
+  ansible.builtin.command:
+    cmd: kdestroy
+  environment:
+    KRB5CCNAME: /tmp/krb5cc_sigstore_ansible
+  changed_when: false
+  failed_when: false

@@ -1,0 +1,70 @@
+---
+# sigstore-deploy.yml — Deploy private Sigstore stack on IPA infrastructure
+#
+# Inventory groups:
+#   sigstore_ca_servers  — IPA server(s) hosting CA + Fulcio
+#   sigstore_rekor_hosts — Hosts running Rekor transparency log mesh
+#   sigstore_clients     — All hosts that need cosign for signing/verification
+#
+# CA modes (set sigstore_ca_mode in inventory or vars):
+#   ipathinca     — IPAthinCA sub-CA, key exported as file (dev/PoC)
+#   dogtag_csr    — generate key locally, cert signed by Dogtag/RHCS (sovereign/NIST lab)
+#   dogtag_pkcs11 — lightweight CA in Dogtag, key stays in NSS DB/HSM (production)
+#
+# Example inventory:
+#   [sigstore_ca_servers]
+#   idm1.example.com
+#
+#   [sigstore_rekor_hosts]
+#   idm1.example.com  sigstore_rekor_is_signer=true sigstore_rekor_build_images=true
+#   idm2.example.com  sigstore_rekor_is_db=true
+#
+#   [sigstore_clients]
+#   idm1.example.com
+#   idm2.example.com
+#   agent1.example.com
+#
+# Usage:
+#   # IPAthinCA (default, PoC/dev):
+#   ansible-playbook playbooks/sigstore-deploy.yml -i inventory/hosts -e @environments/lab.yml
+#
+#   # Dogtag CSR (NIST lab, sovereign):
+#   ansible-playbook playbooks/sigstore-deploy.yml -i inventory/hosts \
+#     -e sigstore_ca_mode=dogtag_csr -e @environments/lab.yml
+#
+#   # Dogtag PKCS#11 (production, key in HSM):
+#   ansible-playbook playbooks/sigstore-deploy.yml -i inventory/hosts \
+#     -e sigstore_ca_mode=dogtag_pkcs11 -e @environments/production.yml
+#
+#   # Individual components:
+#   ansible-playbook playbooks/sigstore-deploy.yml -i inventory/hosts --tags sigstore_fulcio
+
+- name: Deploy Sigstore CA and Fulcio on IPA server
+  hosts: sigstore_ca_servers
+  become: true
+  vars:
+    # For ipathinca and dogtag_csr: Fulcio uses fileca (key on disk)
+    sigstore_fulcio_generate_ca: false
+    sigstore_fulcio_ca_cert: /etc/ipa/fulcio/ca-cert.pem
+    sigstore_fulcio_ca_key: /etc/ipa/fulcio/ca-key.pem
+    sigstore_fulcio_ca_chain: /etc/ipa/fulcio/root-ca.pem
+    # For dogtag_pkcs11: Fulcio uses pkcs11ca (key in HSM)
+    sigstore_fulcio_signer_mode: "{{ 'pkcs11ca' if sigstore_ca_mode | default('ipathinca') == 'dogtag_pkcs11' else 'fileca' }}"
+    sigstore_fulcio_pkcs11_config: /etc/ipa/fulcio/pkcs11-config.json
+    sigstore_fulcio_pkcs11_ca_cert: /etc/ipa/fulcio/ca-cert.pem
+  roles:
+    - sigstore_ca
+    - sigstore_oidc
+    - sigstore_fulcio
+
+- name: Deploy Rekor transparency log mesh
+  hosts: sigstore_rekor_hosts
+  become: true
+  roles:
+    - sigstore_rekor
+
+- name: Install cosign and configure trust root on signing clients
+  hosts: sigstore_clients
+  become: true
+  roles:
+    - sigstore_cosign

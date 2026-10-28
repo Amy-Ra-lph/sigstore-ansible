@@ -1,0 +1,22 @@
+---
+- name: Query Rekor API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ sigstore_rekor_port }}/api/v1/log"
+    return_content: true
+  register: _rekor_api
+  failed_when: false
+
+- name: Report Rekor status
+  ansible.builtin.debug:
+    msg: >-
+      Rekor on {{ inventory_hostname }}:
+      {{ 'HEALTHY' if _rekor_api.status == 200 else 'NOT RESPONDING' }}
+      {% if _rekor_api.status == 200 %}
+      — treeID={{ _rekor_api.json.treeID | default('unknown') }},
+      treeSize={{ _rekor_api.json.treeSize | default(_rekor_api.json.TreeSize | default(0)) }}
+      {% endif %}
+
+- name: Fail if Rekor not responding
+  ansible.builtin.fail:
+    msg: "Rekor API not responding on {{ inventory_hostname }}"
+  when: _rekor_api.status != 200

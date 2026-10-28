@@ -1,0 +1,22 @@
+[Unit]
+Description=Rekor Transparency Log Server
+After=rekor-trillian-logserver.service
+
+[Container]
+Image=localhost/rekor-ipa:latest
+ContainerName=rekor-server
+
+EnvironmentFile={{ sigstore_rekor_config_dir }}/rekor-env
+
+PublishPort={{ sigstore_rekor_port }}:3000
+
+Volume={{ sigstore_rekor_config_dir }}:/etc/rekor:ro,z
+
+PodmanArgs=--security-opt no-new-privileges
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

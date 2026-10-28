@@ -1,0 +1,18 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+RUN microdnf install -y shadow-utils && microdnf clean all && \
+    useradd -r -s /sbin/nologin -d /etc/fulcio-config fulcio
+
+COPY fulcio /usr/local/bin/fulcio
+RUN chmod 755 /usr/local/bin/fulcio
+
+COPY fulcio-start.sh /usr/local/bin/fulcio-start.sh
+RUN chmod 755 /usr/local/bin/fulcio-start.sh
+
+RUN mkdir -p /etc/fulcio-config && chown fulcio:fulcio /etc/fulcio-config
+
+USER fulcio
+
+EXPOSE 8080 8081
+
+ENTRYPOINT ["/usr/local/bin/fulcio-start.sh"]

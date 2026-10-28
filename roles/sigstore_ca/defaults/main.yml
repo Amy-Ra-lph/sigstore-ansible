@@ -1,0 +1,34 @@
+---
+# CA mode: ipathinca | dogtag_csr | dogtag_pkcs11
+#   ipathinca     — IPAthinCA sub-CA, key exported as file (dev/PoC)
+#   dogtag_csr    — generate key locally, get cert signed by Dogtag/RHCS (NIST lab, sovereign)
+#   dogtag_pkcs11 — lightweight CA in Dogtag, key stays in NSS DB/HSM (production)
+sigstore_ca_mode: ipathinca
+
+sigstore_ca_name: fulcio-subca
+sigstore_ca_subject: "CN=Fulcio Intermediate CA,O={{ ipa_realm }}"
+sigstore_ca_description: "Fulcio code signing intermediate CA"
+sigstore_ca_dir: /etc/ipa/fulcio
+sigstore_ca_wait_timeout: 30
+sigstore_ca_key_algorithm: RSA
+sigstore_ca_key_size: 4096
+sigstore_ca_validity_days: 3650
+
+# IPAthinCA-specific
+sigstore_ca_ipathinca_subcas_dir: /var/lib/ipathinca/ca/subcas
+
+# Dogtag CSR-specific
+sigstore_ca_dogtag_profile_id: caFulcioSubCA
+sigstore_ca_dogtag_profile_desc: "Fulcio Sub-CA Certificate Profile"
+sigstore_ca_dogtag_ca: ipa
+sigstore_ca_dogtag_service_principal: "sigstore/{{ ansible_fqdn }}"
+sigstore_ca_dogtag_key_passphrase: "{{ vault_sigstore_ca_key_passphrase | default('') }}"
+
+# Dogtag PKCS#11-specific
+sigstore_ca_pkcs11_module: /usr/lib64/libsoftokn3.so
+sigstore_ca_pkcs11_token: internal
+sigstore_ca_pkcs11_pin: "{{ vault_sigstore_ca_pkcs11_pin | default('') }}"
+sigstore_ca_nss_db: /var/lib/pki/pki-tomcat/alias
+
+ipa_realm: "{{ ansible_domain | upper }}"
+ipa_admin_password: "{{ vault_ipaadmin_password }}"

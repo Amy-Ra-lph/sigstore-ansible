@@ -1,0 +1,167 @@
+---
+- name: Create sigstore config directory
+  ansible.builtin.file:
+    path: "{{ sigstore_fulcio_config_dir }}"
+    state: directory
+    mode: "0755"
+  tags: sigstore_fulcio
+
+- name: Generate self-signed Fulcio intermediate CA
+  when:
+    - sigstore_fulcio_generate_ca
+    - sigstore_fulcio_signer_mode == 'fileca'
+  tags: sigstore_fulcio
+  block:
+    - name: Generate CA private key
+      ansible.builtin.command:
+        cmd: >-
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -aes256
+          -pass pass:{{ sigstore_fulcio_key_passphrase }}
+          -out {{ sigstore_fulcio_ca_key }}
+        creates: "{{ sigstore_fulcio_ca_key }}"
+
+    - name: Set CA key permissions
+      ansible.builtin.file:
+        path: "{{ sigstore_fulcio_ca_key }}"
+        mode: "0644"
+
+    - name: Generate CA certificate
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -new -x509 -days 3650
+          -key {{ sigstore_fulcio_ca_key }}
+          -passin pass:{{ sigstore_fulcio_key_passphrase }}
+          -out {{ sigstore_fulcio_ca_cert }}
+          -subj "/CN=Fulcio Intermediate CA,O={{ ipa_realm }}"
+          -addext "basicConstraints=critical,CA:TRUE,pathlen:0"
+          -addext "keyUsage=critical,keyCertSign,cRLSign"
+        creates: "{{ sigstore_fulcio_ca_cert }}"
+
+    - name: Create CA chain file
+      ansible.builtin.copy:
+        src: "{{ sigstore_fulcio_ca_cert }}"
+        dest: "{{ sigstore_fulcio_ca_chain }}"
+        mode: "0644"
+        remote_src: true
+        force: false
+
+- name: Check if Fulcio container image exists
+  ansible.builtin.command:
+    cmd: podman image exists {{ sigstore_fulcio_image }}
+  register: _fulcio_image_exists
+  changed_when: false
+  failed_when: false
+  tags: sigstore_fulcio
+
+- name: Build Fulcio container image
+  when: _fulcio_image_exists.rc != 0
+  tags: sigstore_fulcio
+  block:
+    - name: Create build directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: fulcio-build-
+      register: _fulcio_build_dir
+
+    - name: Extract Fulcio binary from upstream image
+      ansible.builtin.shell: |
+        podman rm -f fulcio-extract 2>/dev/null || true
+        podman create --name fulcio-extract {{ sigstore_fulcio_upstream_image }}
+        podman cp fulcio-extract:/ko-app/fulcio-server {{ _fulcio_build_dir.path }}/fulcio 2>/dev/null || \
+          podman cp fulcio-extract:/usr/bin/fulcio {{ _fulcio_build_dir.path }}/fulcio
+        podman rm fulcio-extract
+      args:
+        creates: "{{ _fulcio_build_dir.path }}/fulcio"
+
+    - name: Copy Containerfile to build directory
+      ansible.builtin.copy:
+        src: Containerfile.fulcio
+        dest: "{{ _fulcio_build_dir.path }}/Containerfile.fulcio"
+        mode: "0644"
+
+    - name: Copy start script to build directory (fileca)
+      ansible.builtin.copy:
+        src: fulcio-start.sh
+        dest: "{{ _fulcio_build_dir.path }}/fulcio-start.sh"
+        mode: "0755"
+      when: sigstore_fulcio_signer_mode == 'fileca'
+
+    - name: Copy start script to build directory (pkcs11ca)
+      ansible.builtin.copy:
+        src: fulcio-start-pkcs11.sh
+        dest: "{{ _fulcio_build_dir.path }}/fulcio-start.sh"
+        mode: "0755"
+      when: sigstore_fulcio_signer_mode == 'pkcs11ca'
+
+    - name: Build Fulcio image
+      ansible.builtin.command:
+        cmd: >-
+          podman build -t {{ sigstore_fulcio_image }}
+          -f {{ _fulcio_build_dir.path }}/Containerfile.fulcio
+          {{ _fulcio_build_dir.path }}
+
+    - name: Clean up build directory
+      ansible.builtin.file:
+        path: "{{ _fulcio_build_dir.path }}"
+        state: absent
+
+- name: Template Fulcio OIDC config
+  ansible.builtin.template:
+    src: fulcio-config.json.j2
+    dest: "{{ sigstore_fulcio_config_dir }}/fulcio-config.json"
+    mode: "0644"
+  notify: Restart fulcio
+  tags: sigstore_fulcio
+
+- name: Template Fulcio environment file (fileca)
+  ansible.builtin.template:
+    src: fulcio-env.j2
+    dest: "{{ sigstore_fulcio_config_dir }}/fulcio-env"
+    mode: "0600"
+  notify: Restart fulcio
+  when: sigstore_fulcio_signer_mode == 'fileca'
+  tags: sigstore_fulcio
+
+- name: Template Fulcio Quadlet (fileca)
+  ansible.builtin.template:
+    src: fulcio.container.j2
+    dest: /etc/containers/systemd/fulcio.container
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart fulcio
+  when: sigstore_fulcio_signer_mode == 'fileca'
+  tags: sigstore_fulcio
+
+- name: Template Fulcio Quadlet (pkcs11ca)
+  ansible.builtin.template:
+    src: fulcio-pkcs11.container.j2
+    dest: /etc/containers/systemd/fulcio.container
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart fulcio
+  when: sigstore_fulcio_signer_mode == 'pkcs11ca'
+  tags: sigstore_fulcio
+
+- name: Flush handlers before starting service
+  ansible.builtin.meta: flush_handlers
+  tags: sigstore_fulcio
+
+- name: Start Fulcio service
+  ansible.builtin.systemd:
+    name: fulcio.service
+    state: started
+    enabled: true
+  tags: sigstore_fulcio
+
+- name: Wait for Fulcio trust bundle endpoint
+  ansible.builtin.uri:
+    url: "http://localhost:{{ sigstore_fulcio_port }}/api/v2/trustBundle"
+    return_content: false
+    status_code: 200
+  register: _fulcio_health
+  until: _fulcio_health.status == 200
+  retries: 12
+  delay: 5
+  tags: sigstore_fulcio

@@ -1,0 +1,45 @@
+---
+- name: Check for existing tree ID file
+  ansible.builtin.stat:
+    path: "{{ sigstore_rekor_config_dir }}/rekor-tree-id"
+  register: _tree_id_file
+
+- name: Read existing tree ID
+  ansible.builtin.slurp:
+    src: "{{ sigstore_rekor_config_dir }}/rekor-tree-id"
+  register: _tree_id_content
+  when: _tree_id_file.stat.exists
+
+- name: Set tree ID fact from file
+  ansible.builtin.set_fact:
+    sigstore_rekor_tree_id: "{{ (_tree_id_content.content | b64decode).strip() }}"
+  when: _tree_id_file.stat.exists
+
+- name: Create Merkle tree
+  when: not _tree_id_file.stat.exists
+  block:
+    - name: Run createtree via logserver container
+      ansible.builtin.command:
+        cmd: >-
+          podman exec rekor-trillian-logserver /usr/local/bin/createtree
+          --admin_server=localhost:{{ sigstore_rekor_trillian_grpc_port }}
+          --tree_type=LOG
+          --hash_strategy=RFC6962_SHA256
+          --description="IPA Sigstore Rekor Log"
+      register: _createtree
+      changed_when: true
+
+    - name: Parse tree ID from createtree output
+      ansible.builtin.set_fact:
+        sigstore_rekor_tree_id: "{{ _createtree.stdout | regex_search('[0-9]+') }}"
+
+    - name: Fail if no tree ID obtained
+      ansible.builtin.fail:
+        msg: "createtree did not return a tree ID"
+      when: sigstore_rekor_tree_id is not defined or sigstore_rekor_tree_id == ""
+
+    - name: Persist tree ID to file
+      ansible.builtin.copy:
+        content: "{{ sigstore_rekor_tree_id }}"
+        dest: "{{ sigstore_rekor_config_dir }}/rekor-tree-id"
+        mode: "0644"

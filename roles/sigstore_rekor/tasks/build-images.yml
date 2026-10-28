@@ -1,0 +1,166 @@
+---
+- name: Check if rekor-ipa image exists
+  ansible.builtin.command:
+    cmd: podman image exists localhost/rekor-ipa:latest
+  register: _rekor_img
+  changed_when: false
+  failed_when: false
+
+- name: Check if trillian-logserver-ipa image exists
+  ansible.builtin.command:
+    cmd: podman image exists localhost/trillian-logserver-ipa:latest
+  register: _logserver_img
+  changed_when: false
+  failed_when: false
+
+- name: Check if trillian-signer-ipa image exists
+  ansible.builtin.command:
+    cmd: podman image exists localhost/trillian-signer-ipa:latest
+  register: _signer_img
+  changed_when: false
+  failed_when: false
+
+- name: Set images needed flag
+  ansible.builtin.set_fact:
+    _need_build: "{{ _rekor_img.rc != 0 or _logserver_img.rc != 0 or _signer_img.rc != 0 }}"
+
+- name: Pull upstream images
+  when: _need_build
+  block:
+    - name: Pull Rekor upstream image
+      ansible.builtin.command:
+        cmd: "podman pull ghcr.io/sigstore/rekor-server:{{ sigstore_rekor_version }}"
+      changed_when: true
+      when: _rekor_img.rc != 0
+
+    - name: Pull Trillian log_server upstream image
+      ansible.builtin.command:
+        cmd: "podman pull gcr.io/trillian-opensource-ci/log_server:{{ sigstore_rekor_trillian_version }}"
+      changed_when: true
+      when: _logserver_img.rc != 0 or _signer_img.rc != 0
+
+    - name: Pull Trillian log_signer upstream image
+      ansible.builtin.command:
+        cmd: "podman pull gcr.io/trillian-opensource-ci/log_signer:{{ sigstore_rekor_trillian_version }}"
+      changed_when: true
+      when: _signer_img.rc != 0
+
+- name: Create build directories
+  ansible.builtin.file:
+    path: "/tmp/sigstore-build/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - rekor
+    - trillian-logserver
+    - trillian-signer
+  when: _need_build
+
+- name: Extract binaries from upstream images
+  when: _need_build
+  block:
+    - name: Extract rekor-server binary
+      ansible.builtin.shell: |
+        podman rm -f rekor-extract 2>/dev/null || true
+        podman create --name rekor-extract ghcr.io/sigstore/rekor-server:{{ sigstore_rekor_version }}
+        podman cp rekor-extract:/ko-app/rekor-server /tmp/sigstore-build/rekor/rekor-server
+        podman rm rekor-extract
+      args:
+        creates: /tmp/sigstore-build/rekor/rekor-server
+      when: _rekor_img.rc != 0
+
+    - name: Extract trillian_log_server and createtree binaries
+      ansible.builtin.shell: |
+        podman rm -f trillian-ls-extract 2>/dev/null || true
+        podman create --name trillian-ls-extract gcr.io/trillian-opensource-ci/log_server:{{ sigstore_rekor_trillian_version }}
+        for path in /ko-app/trillian_log_server /go/bin/trillian_log_server /trillian_log_server; do
+          podman cp trillian-ls-extract:$path /tmp/sigstore-build/trillian-logserver/trillian_log_server 2>/dev/null && break || true
+        done
+        for path in /ko-app/createtree /go/bin/createtree /createtree; do
+          podman cp trillian-ls-extract:$path /tmp/sigstore-build/trillian-logserver/createtree 2>/dev/null && break
+          podman cp trillian-ls-extract:$path /tmp/sigstore-build/rekor/createtree 2>/dev/null && break || true
+        done
+        podman rm trillian-ls-extract
+      args:
+        creates: /tmp/sigstore-build/trillian-logserver/trillian_log_server
+      when: _logserver_img.rc != 0
+
+    - name: Extract trillian_log_signer binary
+      ansible.builtin.shell: |
+        podman rm -f trillian-signer-extract 2>/dev/null || true
+        podman create --name trillian-signer-extract gcr.io/trillian-opensource-ci/log_signer:{{ sigstore_rekor_trillian_version }}
+        for path in /ko-app/trillian_log_signer /go/bin/trillian_log_signer /trillian_log_signer; do
+          podman cp trillian-signer-extract:$path /tmp/sigstore-build/trillian-signer/trillian_log_signer 2>/dev/null && break || true
+        done
+        podman rm trillian-signer-extract
+      args:
+        creates: /tmp/sigstore-build/trillian-signer/trillian_log_signer
+      when: _signer_img.rc != 0
+
+    - name: Ensure createtree in rekor build dir
+      ansible.builtin.copy:
+        src: /tmp/sigstore-build/trillian-logserver/createtree
+        dest: /tmp/sigstore-build/rekor/createtree
+        mode: "0755"
+        remote_src: true
+      failed_when: false
+
+- name: Copy Containerfiles and start scripts
+  when: _need_build
+  block:
+    - name: Copy Rekor build files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "/tmp/sigstore-build/rekor/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: Containerfile.rekor, dest: Containerfile.rekor, mode: "0644" }
+        - { src: rekor-start.sh, dest: rekor-start.sh, mode: "0755" }
+
+    - name: Copy Trillian logserver build files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "/tmp/sigstore-build/trillian-logserver/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: Containerfile.trillian-logserver, dest: Containerfile.trillian-logserver, mode: "0644" }
+        - { src: trillian-logserver-start.sh, dest: trillian-logserver-start.sh, mode: "0755" }
+
+    - name: Copy Trillian signer build files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "/tmp/sigstore-build/trillian-signer/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: Containerfile.trillian-signer, dest: Containerfile.trillian-signer, mode: "0644" }
+        - { src: trillian-signer-start.sh, dest: trillian-signer-start.sh, mode: "0755" }
+
+- name: Build container images
+  when: _need_build
+  block:
+    - name: Build trillian-logserver-ipa image
+      ansible.builtin.command:
+        cmd: podman build -t localhost/trillian-logserver-ipa:latest -f Containerfile.trillian-logserver .
+        chdir: /tmp/sigstore-build/trillian-logserver
+      when: _logserver_img.rc != 0
+      changed_when: true
+
+    - name: Build trillian-signer-ipa image
+      ansible.builtin.command:
+        cmd: podman build -t localhost/trillian-signer-ipa:latest -f Containerfile.trillian-signer .
+        chdir: /tmp/sigstore-build/trillian-signer
+      when: _signer_img.rc != 0
+      changed_when: true
+
+    - name: Build rekor-ipa image
+      ansible.builtin.command:
+        cmd: podman build -t localhost/rekor-ipa:latest -f Containerfile.rekor .
+        chdir: /tmp/sigstore-build/rekor
+      when: _rekor_img.rc != 0
+      changed_when: true
+
+- name: Clean up build directories
+  ansible.builtin.file:
+    path: /tmp/sigstore-build
+    state: absent
+  when: _need_build
