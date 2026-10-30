@@ -363,6 +363,84 @@
         fail_msg: "Log is empty"
         success_msg: "PASS: Log has {{ _rekor_primary.json.treeSize | default(_rekor_primary.json.TreeSize) | default(0) }} entries"
 
+    # --- Akamu-mode tests (adapter transparency log) ---
+    - name: "Test 21: Adapter health check"
+      ansible.builtin.uri:
+        url: "{{ fulcio_url }}/healthz"
+        return_content: true
+      register: _adapter_health
+      failed_when: false
+      when: sigstore_test_mode | default('fulcio') == 'akamu'
+
+    - name: Assert adapter healthy with tree_size
+      ansible.builtin.assert:
+        that:
+          - _adapter_health.status == 200
+          - _adapter_health.json.tree_size is defined
+        fail_msg: "Adapter not healthy"
+        success_msg: "PASS: Adapter healthy, tree_size={{ _adapter_health.json.tree_size }}"
+      when: sigstore_test_mode | default('fulcio') == 'akamu'
+
+    - name: "Test 22: Adapter CT log has entries"
+      ansible.builtin.uri:
+        url: "{{ fulcio_url }}/api/v1/log"
+        return_content: true
+      register: _adapter_log
+      failed_when: false
+      when: sigstore_test_mode | default('fulcio') == 'akamu'
+
+    - name: Assert CT log has entries
+      ansible.builtin.assert:
+        that:
+          - _adapter_log.status == 200
+          - _adapter_log.json.treeSize | int > 0
+        fail_msg: "CT log empty"
+        success_msg: "PASS: CT log has {{ _adapter_log.json.treeSize }} entries"
+      when: sigstore_test_mode | default('fulcio') == 'akamu'
+
+    - name: "Test 23: Akamu CA discovery via akamu-cli"
+      ansible.builtin.command:
+        cmd: >-
+          akamu-cli ca list
+          --server https://{{ groups['sigstore_ca_servers'][0] }}/akamu/acme/directory
+      register: _akamu_ca
+      changed_when: false
+      failed_when: false
+      when: sigstore_test_mode | default('fulcio') == 'akamu'
+
+    - name: Assert Akamu CA listed
+      ansible.builtin.assert:
+        that: "'default' in _akamu_ca.stdout"
+        fail_msg: "Akamu CA not found: {{ _akamu_ca.stdout }}"
+        success_msg: "PASS: Akamu CA available"
+      when:
+        - sigstore_test_mode | default('fulcio') == 'akamu'
+        - _akamu_ca.rc == 0
+
+    - name: "Test 24: ML-DSA account registration"
+      ansible.builtin.command:
+        cmd: >-
+          akamu-cli issue
+          --server https://{{ groups['sigstore_ca_servers'][0] }}/akamu/acme/directory
+          --server-ca /etc/ipa/ca.crt
+          --key-type ml-dsa-65
+          --account-key {{ _test_dir }}/mldsa-account.pem
+          --domain {{ ansible_fqdn }}
+          --out /dev/null
+      register: _mldsa_account
+      changed_when: false
+      failed_when: false
+      when: sigstore_test_mode | default('fulcio') == 'akamu'
+
+    - name: Assert ML-DSA account created
+      ansible.builtin.assert:
+        that: "'Registered new account' in _mldsa_account.stdout or 'ml-dsa-65' in _mldsa_account.stdout"
+        fail_msg: "ML-DSA account registration failed: {{ _mldsa_account.stderr }}"
+        success_msg: "PASS: ML-DSA-65 ACME account registered"
+      when:
+        - sigstore_test_mode | default('fulcio') == 'akamu'
+        - _mldsa_account is defined
+
     # --- Cleanup ---
     - name: Clean up test artifacts
       ansible.builtin.file:

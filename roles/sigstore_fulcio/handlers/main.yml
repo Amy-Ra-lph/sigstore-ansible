@@ -7,3 +7,8 @@
   ansible.builtin.systemd:
     name: fulcio.service
     state: restarted
+
+- name: Restart akamu-signing-adapter
+  ansible.builtin.systemd:
+    name: akamu-signing-adapter.service
+    state: restarted

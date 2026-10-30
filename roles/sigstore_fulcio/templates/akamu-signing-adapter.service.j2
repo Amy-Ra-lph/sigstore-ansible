@@ -1,0 +1,27 @@
+[Unit]
+Description=Akamu Signing Adapter (Fulcio+Rekor API → Dogtag CA)
+After=network-online.target akamu.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 {{ sigstore_fulcio_akamu_adapter_dir }}/adapter.py \
+  --host 0.0.0.0 \
+  --port {{ sigstore_fulcio_port }} \
+  --akamu-url {{ sigstore_fulcio_akamu_url }} \
+  --dogtag-url {{ sigstore_fulcio_akamu_dogtag_url }} \
+  --ra-cert {{ sigstore_fulcio_akamu_ra_cert }} \
+  --ra-key {{ sigstore_fulcio_akamu_ra_key }} \
+  --ca-cert /etc/ipa/ca.crt \
+  --profile-id {{ sigstore_fulcio_akamu_profile_id }} \
+  --db-path {{ sigstore_fulcio_akamu_db_path }}
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+ReadWritePaths=/var/lib/akamu
+NoNewPrivileges=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

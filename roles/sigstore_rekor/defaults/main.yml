@@ -20,3 +20,7 @@ sigstore_rekor_build_images: true
 sigstore_rekor_install_cosign: true
 sigstore_rekor_mysql_uri: >-
   {{ sigstore_rekor_db_user }}:{{ sigstore_rekor_db_password }}@tcp({{ sigstore_rekor_db_host }}:{{ sigstore_rekor_db_port }})/{{ sigstore_rekor_db_name }}
+
+# Set to 'akamu' to skip Rekor/Trillian/MariaDB entirely —
+# the akamu-signing-adapter (deployed by sigstore_fulcio role) handles transparency.
+sigstore_rekor_mode: rekor

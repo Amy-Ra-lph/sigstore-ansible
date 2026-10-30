@@ -22,3 +22,12 @@ sigstore_fulcio_oidc_issuer: "https://{{ ansible_fqdn }}/idp"
 sigstore_fulcio_oidc_client_id: sigstore
 sigstore_fulcio_oidc_type: email
 ipa_realm: "{{ ansible_domain | upper }}"
+
+# akamu mode settings (replaces Fulcio container with lightweight adapter)
+sigstore_fulcio_akamu_url: "https://{{ ansible_fqdn }}/akamu"
+sigstore_fulcio_akamu_dogtag_url: "https://{{ ansible_fqdn }}:8443"
+sigstore_fulcio_akamu_ra_cert: /var/lib/akamu/akamu-ra-agent.pem
+sigstore_fulcio_akamu_ra_key: /var/lib/akamu/akamu-ra-agent.key
+sigstore_fulcio_akamu_profile_id: caIPAserviceCert
+sigstore_fulcio_akamu_adapter_dir: /opt/akamu-signing-adapter
+sigstore_fulcio_akamu_db_path: /var/lib/akamu/adapter-ct-log.db

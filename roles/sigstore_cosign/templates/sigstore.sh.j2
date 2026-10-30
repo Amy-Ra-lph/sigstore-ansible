@@ -5,6 +5,7 @@ export SIGSTORE_ROOT_FILE="{{ sigstore_cosign_trust_root_dir }}/fulcio-root.pem"
 alias cosign-sign='cosign sign-blob \
   --fulcio-url={{ sigstore_cosign_fulcio_url }} \
   --rekor-url={{ sigstore_cosign_rekor_url }} \
+  --oidc-issuer={{ sigstore_cosign_oidc_issuer }} \
   --insecure-skip-verify --yes'
 
 alias cosign-verify='cosign verify-blob \

@@ -36,6 +36,10 @@
 #   ansible-playbook playbooks/sigstore-deploy.yml -i inventory/hosts \
 #     -e sigstore_ca_mode=dogtag_pkcs11 -e @environments/production.yml
 #
+#   # Akamu (PQC-native, replaces Fulcio+Rekor with IPA-native services):
+#   ansible-playbook playbooks/sigstore-deploy.yml -i inventory/hosts \
+#     -e sigstore_ca_mode=akamu -e @environments/lab.yml
+#
 #   # Individual components:
 #   ansible-playbook playbooks/sigstore-deploy.yml -i inventory/hosts --tags sigstore_fulcio
 
@@ -49,7 +53,10 @@
     sigstore_fulcio_ca_key: /etc/ipa/fulcio/ca-key.pem
     sigstore_fulcio_ca_chain: /etc/ipa/fulcio/root-ca.pem
     # For dogtag_pkcs11: Fulcio uses pkcs11ca (key in HSM)
-    sigstore_fulcio_signer_mode: "{{ 'pkcs11ca' if sigstore_ca_mode | default('ipathinca') == 'dogtag_pkcs11' else 'fileca' }}"
+    sigstore_fulcio_signer_mode: >-
+      {{ 'akamu' if sigstore_ca_mode | default('ipathinca') == 'akamu'
+         else ('pkcs11ca' if sigstore_ca_mode | default('ipathinca') == 'dogtag_pkcs11'
+         else 'fileca') }}
     sigstore_fulcio_pkcs11_config: /etc/ipa/fulcio/pkcs11-config.json
     sigstore_fulcio_pkcs11_ca_cert: /etc/ipa/fulcio/ca-cert.pem
   roles:
@@ -60,11 +67,24 @@
 - name: Deploy Rekor transparency log mesh
   hosts: sigstore_rekor_hosts
   become: true
+  vars:
+    sigstore_rekor_mode: "{{ 'akamu' if sigstore_ca_mode | default('ipathinca') == 'akamu' else 'rekor' }}"
   roles:
     - sigstore_rekor
 
 - name: Install cosign and configure trust root on signing clients
   hosts: sigstore_clients
   become: true
+  vars:
+    # In akamu mode, both Fulcio and Rekor point to the adapter on the CA server
+    sigstore_cosign_fulcio_url: >-
+      {{ 'http://' + groups['sigstore_ca_servers'][0] + ':5555'
+         if sigstore_ca_mode | default('ipathinca') == 'akamu'
+         else 'http://' + ansible_fqdn + ':5555' }}
+    sigstore_cosign_rekor_url: >-
+      {{ 'http://' + groups['sigstore_ca_servers'][0] + ':5555'
+         if sigstore_ca_mode | default('ipathinca') == 'akamu'
+         else 'http://' + ansible_fqdn + ':3000' }}
+    sigstore_cosign_configure_trust: "{{ sigstore_ca_mode | default('ipathinca') != 'akamu' }}"
   roles:
     - sigstore_cosign

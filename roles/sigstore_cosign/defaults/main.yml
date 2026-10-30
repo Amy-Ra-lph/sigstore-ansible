@@ -5,3 +5,6 @@ sigstore_cosign_fulcio_url: "http://{{ ansible_fqdn }}:5555"
 sigstore_cosign_rekor_url: "http://{{ ansible_fqdn }}:3000"
 sigstore_cosign_trust_root_dir: /etc/ipa/sigstore/trust-root
 sigstore_cosign_configure_trust: true
+
+# When using akamu mode, both Fulcio and Rekor URLs point to the adapter
+sigstore_cosign_oidc_issuer: "https://{{ ansible_fqdn }}/idp"

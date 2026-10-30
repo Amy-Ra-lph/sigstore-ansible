@@ -1,0 +1,61 @@
+---
+# akamu.yml — Deploy akamu-signing-adapter as Fulcio+Rekor replacement
+#
+# The adapter translates cosign's Fulcio and Rekor API calls into
+# Akamu ACME flows backed by Dogtag CA, with an adapter-side
+# append-only Merkle tree transparency log.
+#
+# Prerequisites: Akamu must be installed and running (RPM or source).
+
+- name: Create adapter directory
+  ansible.builtin.file:
+    path: "{{ sigstore_fulcio_akamu_adapter_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Deploy akamu-signing-adapter
+  ansible.builtin.copy:
+    src: akamu-signing-adapter.py
+    dest: "{{ sigstore_fulcio_akamu_adapter_dir }}/adapter.py"
+    mode: "0755"
+  notify: Restart akamu-signing-adapter
+
+- name: Verify Akamu RA agent credentials exist
+  ansible.builtin.stat:
+    path: "{{ sigstore_fulcio_akamu_ra_cert }}"
+  register: _akamu_ra_cert
+
+- name: Fail if RA agent credentials missing
+  ansible.builtin.fail:
+    msg: >-
+      Akamu RA agent certificate not found at {{ sigstore_fulcio_akamu_ra_cert }}.
+      Akamu must be installed and configured before deploying the signing adapter.
+  when: not _akamu_ra_cert.stat.exists
+
+- name: Template adapter systemd unit
+  ansible.builtin.template:
+    src: akamu-signing-adapter.service.j2
+    dest: /etc/systemd/system/akamu-signing-adapter.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart akamu-signing-adapter
+
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Start akamu-signing-adapter
+  ansible.builtin.systemd:
+    name: akamu-signing-adapter.service
+    state: started
+    enabled: true
+
+- name: Wait for adapter health endpoint
+  ansible.builtin.uri:
+    url: "http://localhost:{{ sigstore_fulcio_port }}/healthz"
+    return_content: true
+    status_code: 200
+  register: _adapter_health
+  until: _adapter_health.status == 200
+  retries: 10
+  delay: 3

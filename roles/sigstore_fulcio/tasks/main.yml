@@ -1,4 +1,14 @@
 ---
+- name: Deploy Akamu signing adapter (replaces Fulcio + Rekor)
+  ansible.builtin.include_tasks: akamu.yml
+  when: sigstore_fulcio_signer_mode == 'akamu'
+  tags: sigstore_fulcio
+
+- name: End play for akamu mode (Fulcio container not needed)
+  ansible.builtin.meta: end_host
+  when: sigstore_fulcio_signer_mode == 'akamu'
+  tags: sigstore_fulcio
+
 - name: Create sigstore config directory
   ansible.builtin.file:
     path: "{{ sigstore_fulcio_config_dir }}"

@@ -1,4 +1,18 @@
 ---
+- name: Skip upstream Rekor stack (akamu adapter handles transparency)
+  ansible.builtin.debug:
+    msg: >-
+      Rekor mode is 'akamu' — skipping Rekor/Trillian/MariaDB deployment.
+      The akamu-signing-adapter (deployed by sigstore_fulcio role) provides
+      Rekor-compatible API at the same port (5555).
+  when: sigstore_rekor_mode == 'akamu'
+  tags: sigstore_rekor
+
+- name: End play for akamu mode
+  ansible.builtin.meta: end_host
+  when: sigstore_rekor_mode == 'akamu'
+  tags: sigstore_rekor
+
 - name: Create sigstore config directory
   ansible.builtin.file:
     path: "{{ sigstore_rekor_config_dir }}"
